@@ -82,7 +82,7 @@ def estimate_camera_orientation(points_data, focal_lengths, sensor_sizes, image_
 
             success, initial_rotation_vector, initial_translation_vector, inliers = cv2.solvePnPRansac(
                 pos3d, pixels, K, dist_coeffs, useExtrinsicGuess=False,
-                iterationsCount=5000, reprojectionError=70.0, confidence=0.99
+                iterationsCount=5000, reprojectionError=50.0, confidence=0.99
             )
 
             if not success or inliers is None or len(inliers) < 6:
@@ -144,23 +144,12 @@ def optimize_camera_center(selected_result, points_data):
     print("w", [w])
     print("h", [h])
 
-    # 提取内点
-    inlier_symbols = inliers
+    # 使用所有点进行相机标定
+    pos3d_all = np.array([rec['pos3d'] for rec in points_data], dtype=np.float32)
+    pixels_all = np.array([rec['pixel'] for rec in points_data], dtype=np.float32)
 
-    pos3d_inliers = []
-    pixels_inliers = []
-
-    for rec in points_data:
-        if rec['symbol'] in inlier_symbols:
-            pos3d_inliers.append(rec['pos3d'])
-            pixels_inliers.append(rec['pixel'])
-
-    pos3d_inliers = [np.array(pos3d_inliers, dtype=np.float32)]
-    pixels_inliers = [np.array(pixels_inliers, dtype=np.float32)]
-
-    # 输出以检查pos3d_inliers和pixels_inliers
-    print("pos3d_inliers:", pos3d_inliers)
-    print("pixels_inliers:", pixels_inliers)
+    print("pos3d_all", [pos3d_all])
+    print("pixels_all", [pixels_all])
 
     # 初始化畸变系数为0
     dist_coeffs = np.zeros((4, 1), dtype=np.float32)
@@ -169,11 +158,9 @@ def optimize_camera_center(selected_result, points_data):
 
     # 使用 cv2.calibrateCamera 进行相机标定优化光心，固定焦距和畸变系数
     ret, K_optimized, dist_coeffs_optimized, rvecs, tvecs = cv2.calibrateCamera(
-        pos3d_inliers, pixels_inliers, (w, h), K.astype(np.float32), dist_coeffs,
-        flags=cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_FOCAL_LENGTH |
-              cv2.CALIB_FIX_ASPECT_RATIO | cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 |
-              cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 |
-              cv2.CALIB_FIX_K6
+        [pos3d_all], [pixels_all], (w, h), K.astype(np.float32), dist_coeffs,
+        flags=cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_FOCAL_LENGTH | cv2.CALIB_FIX_ASPECT_RATIO | cv2.CALIB_FIX_TANGENT_DIST |
+              cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 | cv2.CALIB_FIX_K6
     )
 
     print(f"Optimized Camera Matrix:\n{K_optimized}")
