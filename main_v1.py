@@ -1003,7 +1003,7 @@ def main():
             "pixel_y": "Pixel_y_1898.jpg",
             "output": "zOutput_1898.png",
             "scale": 1.0,
-            "dem_file": "dem_kuliang.tif"
+            "dem_file": "dem_dx_tinra.tif"
         },
         {
             "image_name": "1900-1910.jpg",
