@@ -37,29 +37,24 @@ class GeoCoordTransformer:
     def __init__(self):
         self.to_utm = Transformer.from_crs("epsg:4326", "epsg:32650", always_xy=True)
         self.to_wgs84 = Transformer.from_crs("epsg:32650", "epsg:4326", always_xy=True)
-        self.to_cgcs2000 = Transformer.from_crs("epsg:4326", "epsg:4549", always_xy=True)
-        self.from_cgcs2000_to_utm = Transformer.from_crs("epsg:4549", "epsg:32650", always_xy=True)
-        self.from_utm_to_cgcs2000 = Transformer.from_crs("epsg:32650", "epsg:4549", always_xy=True)
 
-    def wgs84_to_utm(self, lon, lat):
-        easting, northing = self.to_utm.transform(lon, lat)
-        return easting, northing
+    def wgs84_to_utm(self, lon, lat):  # 注意顺序：先经度，后纬度
+        try:
+            easting, northing = self.to_utm.transform(lon, lat)
+            if np.isinf(easting) or np.isinf(northing):
+                raise ValueError('Invalid UTM coordinates')
+            return easting, northing
+        except Exception as e:
+            raise
 
     def utm_to_wgs84(self, easting, northing):
-        lon, lat = self.to_wgs84.transform(easting, northing)
-        return lon, lat
-
-    def wgs84_to_cgcs2000(self, lon, lat):
-        x, y = self.to_cgcs2000.transform(lon, lat)
-        return x, y
-
-    def cgcs2000_to_utm(self, x, y):
-        easting, northing = self.from_cgcs2000_to_utm.transform(x, y)
-        return easting, northing
-
-    def utm_to_cgcs2000(self, easting, northing):
-        x, y = self.from_utm_to_cgcs2000.transform(easting, northing)
-        return x, y
+        try:
+            lon, lat = self.to_wgs84.transform(easting, northing)  # 注意顺序：先经度，后纬度
+            if np.isinf(lat) or np.isinf(lon):
+                raise ValueError('Invalid WGS84 coordinates')
+            return lon, lat
+        except Exception as e:
+            raise
 
 geo_transformer = GeoCoordTransformer()
 
@@ -437,17 +432,36 @@ def load_dem_data(dem_file):
     dem_x = np.arange(dem_array.shape[1]) * gt[1] + gt[0]
     dem_y = np.arange(dem_array.shape[0]) * gt[5] + gt[3]
 
+    # 新增部分：计算 DEM 四角点在 UTM 下的坐标范围
+    corners = [
+        (dem_x.min(), dem_y.min()),
+        (dem_x.min(), dem_y.max()),
+        (dem_x.max(), dem_y.min()),
+        (dem_x.max(), dem_y.max())
+    ]
+    utm_x_list = []
+    utm_y_list = []
+    for lon, lat in corners:
+        try:
+            easting, northing = geo_transformer.wgs84_to_utm(lon, lat)
+            utm_x_list.append(easting)
+            utm_y_list.append(northing)
+        except Exception as e:
+            logging.error(f"转换 DEM 坐标 {lon},{lat} 到 UTM 时出错: {e}")
+    dem_utm_x_range = (min(utm_x_list), max(utm_x_list)) if utm_x_list else (None, None)
+    dem_utm_y_range = (min(utm_y_list), max(utm_y_list)) if utm_y_list else (None, None)
+
     dem_interpolator = RegularGridInterpolator((dem_y, dem_x), dem_array)
     dem_data = {
         'interpolator': dem_interpolator,
         'x_range': (dem_x.min(), dem_x.max()),
         'y_range': (dem_y.min(), dem_y.max()),
-        'cgcs_x_range': (dem_x.min(), dem_x.max()),  # Assuming x_range and cgcs_x_range are the same
-        'cgcs_y_range': (dem_y.min(), dem_y.max()),  # Assuming y_range and cgcs_y_range are the same
+        'utm_x_range': dem_utm_x_range,
+        'utm_y_range': dem_utm_y_range,
         'data': dem_array
     }
     logging.debug(f"DEM 范围: 经度 {dem_data['x_range']}, 纬度 {dem_data['y_range']}")
-    logging.debug(f"DEM CGCS2000 范围: X {dem_data['cgcs_x_range']}, Y {dem_data['cgcs_y_range']}")
+    logging.debug(f"DEM UTM 范围: 东距 {dem_data['utm_x_range']}, 北距 {dem_data['utm_y_range']}")
     return dem_data
 
 # 使用PnP算法进行相机姿态估计
@@ -483,7 +497,7 @@ def estimate_camera_pose(pos3d, pixels, K):
     success, rotation_vector, translation_vector, inliers = cv2.solvePnPRansac(
         pos3d, pixels, K, dist_coeffs,
         iterationsCount=5000,
-        reprojectionError=30.0,
+        reprojectionError=50.0,
         confidence=0.99
     )
     print("Inliers:\n", inliers)
@@ -497,39 +511,24 @@ def estimate_camera_pose(pos3d, pixels, K):
     print(f"Translation Vector (T):\n{translation_vector}")
     return rotation_vector, translation_vector, inliers
 
-# 检查并调整translation_vector的值
-def check_translation_vector(translation_vector):
-    max_value = 1e4  # 根据实际情况调整阈值
-    if np.any(np.abs(translation_vector) > max_value):
-        logging.warning(f"Translation vector values are too large: {translation_vector}")
-        translation_vector = np.clip(translation_vector, -max_value, max_value)
-    return translation_vector
-
 # 获取DEM数据中的海拔值
-def get_dem_elevation(dem_data, x, y, is_utm=False):
+def get_dem_elevation(dem_data, coord, coord_type='utm'):
     """
-    获取DEM数据中的海拔值
-    :param dem_data: DEM数据信息
-    :param x: CGCS2000 坐标系下的 x 坐标
-    :param y: CGCS2000 坐标系下的 y 坐标
-    :param is_utm: 输入坐标是否为UTM坐标，默认为False
-    :return: 海拔值
+    根据坐标类型获取 DEM 高程。
+    :param dem_data: DEM 数据
+    :param coord: 坐标 (easting, northing) 或 (lon, lat)
+    :param coord_type: 坐标类型，'utm' 或 'wgs84'
+    :return: 海拔高度
     """
+    if coord_type == 'utm':
+        lon, lat = geo_transformer.utm_to_wgs84(coord[0], coord[1])
+    elif coord_type == 'wgs84':
+        lon, lat = coord
+    else:
+        raise ValueError("Invalid coord_type. Must be 'utm' or 'wgs84'.")
 
-    # 输出转换后的 CGCS2000 坐标
-    print(f"获取高程时使用的 CGCS2000 坐标: x={x}, y={y}")
-
-    # 检查坐标是否为有效值
-    if np.isinf(x) or np.isinf(y):
-        raise ValueError(f"获取高程时使用的 CGCS2000 坐标无效: x={x}, y={y}")
-
-    # 检查坐标是否在 DEM 数据的范围内
-    if not (dem_data['cgcs_x_range'][0] <= x <= dem_data['cgcs_x_range'][1] and
-            dem_data['cgcs_y_range'][0] <= y <= dem_data['cgcs_y_range'][1]):
-        raise ValueError("One of the requested xi is out of bounds in the DEM data")
-
-    # 直接从 DEM 数据中获取高程
-    dem_elev = dem_data['interpolator']((y, x))
+    # 插值器构造时使用的坐标顺序为 (lat, lon)
+    dem_elev = dem_data['interpolator']((lat, lon))
     return dem_elev
 
 # 将像素坐标转换为射线
@@ -676,6 +675,7 @@ def pixel_to_geo(pixel_coord, K, R, ray_origin, dem_data, control_points, optimi
 # read data from the features file
 # **********
 def read_points_data(filename, pixel_x, pixel_y, scale, dem_data):
+    updated_rows = []
     with open(filename, encoding='utf-8') as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         line_count = 0
@@ -683,103 +683,91 @@ def read_points_data(filename, pixel_x, pixel_y, scale, dem_data):
         pixels = []
         for row in csv_reader:
             if line_count == 0:
+                updated_rows.append(row)  # 保留标题行
                 line_count += 1
                 names = row
                 indx = names.index(pixel_x)
                 indy = names.index(pixel_y)
             else:
-                line_count += 1
                 symbol = row[1]
                 name = row[2]
                 pixel = np.array([int(row[indx]), int(row[indy])]) / scale
                 longitude = float(row[4])
                 latitude = float(row[5])
-                print(f"读取到的 WGS84 坐标: longitude={longitude}, latitude={latitude}")
-
-                # 将WGS84坐标转换为CGCS2000坐标
-                try:
-                    cgcs_x, cgcs_y = geo_transformer.wgs84_to_cgcs2000(longitude, latitude)
-                    print(f"转换后的 CGCS2000 坐标: x={cgcs_x}, y={cgcs_y}")
-                except Exception as e:
-                    print(f"转换 WGS84 到 CGCS2000 坐标时出错: {e}")
-                    continue
-
-                # 从DEM中获取高程
-                try:
-                    elevation = get_dem_elevation(dem_data, cgcs_x, cgcs_y)
-                except Exception as e:
-                    print(f"获取高程时出错: {e}")
-                    continue
-
-                # 将WGS84坐标转换为UTM坐标
-                try:
-                    utm_x, utm_y = geo_transformer.wgs84_to_utm(longitude, latitude)
-                except Exception as e:
-                    print(f"转换 WGS84 到 UTM 坐标时出错: {e}")
-                    continue
-
-                if pixel[0] == 0 and pixel[1] == 0:
+                elevation = get_dem_elevation(dem_data, (longitude, latitude), coord_type='wgs84')
+                row[6] = str(elevation)  # 更新Elevation列
+                updated_rows.append(row)  # 保存更新后的行
+                # 跳过当前处理照片中像素坐标为0,0的点
+                if int(row[indx]) == 0 and int(row[indy]) == 0:
                     continue
                 pixels.append(pixel)
-
-                pos3d = np.array([utm_x, utm_y, elevation])
-                print(f"pos3d 坐标: x={utm_x}, y={utm_y}, elevation={elevation}")
+                # 添加坐标转换
+                try:
+                    logging.debug(f'Processing row {line_count}: lat={latitude}, lon={longitude}')
+                    easting, northing = geo_transformer.wgs84_to_utm(longitude, latitude)  # 注意顺序
+                    pos3d = np.array([easting, northing, elevation])
+                    print(f"Processed Point - Symbol: {symbol}, Name: {name}, Pixel: {pixel}, Lon: {longitude}, Lat: {latitude}, Easting: {easting}, Northing: {northing}, Elevation: {elevation}")
+                except ValueError as e:
+                    logging.error(f'Error processing row {line_count}: {e}')
+                    continue
 
                 rec = {'symbol': symbol,
                        'pixel': pixel,
                        'pos3d': pos3d,
                        'name': name}
                 recs.append(rec)
-        return recs
+                line_count += 1
+
+    # 将更新后的数据写回文件
+    with open(filename, 'w', newline='', encoding='utf-8') as csv_file:
+        csv_writer = csv.writer(csv_file, delimiter=',')
+        csv_writer.writerows(updated_rows)
+
+    logging.debug(f'Processed {line_count} lines.')
+    return recs
 
 # **********
 # read data from the potential camera locations file
 # **********
 def read_camera_locations(camera_locations, dem_data):
+    updated_rows = []
     with open(camera_locations, encoding='utf-8') as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         line_count = 0
         recs = []
         for row in csv_reader:
             if line_count == 0:
+                updated_rows.append(row)  # 保留标题行
                 line_count += 1
                 names = row
             else:
-                line_count += 1
                 grid_code = int(row[1])
                 longitude = float(row[2])
                 latitude = float(row[3])
-                print(f"读取到的 WGS84 坐标: longitude={longitude}, latitude={latitude}")
-
-                # 将WGS84坐标转换为CGCS2000坐标
+                elevation = get_dem_elevation(dem_data, (longitude, latitude), coord_type='wgs84') + 1.5
+                row[4] = str(elevation)  # 更新Elevation列
+                updated_rows.append(row)  # 保存更新后的行
+                # 添加坐标转换
                 try:
-                    cgcs_x, cgcs_y = geo_transformer.wgs84_to_cgcs2000(longitude, latitude)
-                    print(f"转换后的 CGCS2000 坐标: x={cgcs_x}, y={cgcs_y}")
-                except Exception as e:
-                    print(f"转换 WGS84 到 CGCS2000 坐标时出错: {e}")
+                    logging.debug(f'Processing row {line_count}: lat={latitude}, lon={longitude}')
+                    easting, northing = geo_transformer.wgs84_to_utm(longitude, latitude)  # 注意顺序
+                    pos3d = np.array([easting, northing, elevation])
+                except ValueError as e:
+                    logging.error(f'Error processing row {line_count}: {e}')
                     continue
-
-                # 从DEM中获取高程
-                try:
-                    height = get_dem_elevation(dem_data, cgcs_x,
-                                               cgcs_y) + 2.0  # addition of 2 meters as the observer height
-                except Exception as e:
-                    print(f"获取高程时出错: {e}")
-                    continue
-
-                # 将WGS84坐标转换为UTM坐标
-                try:
-                    utm_x, utm_y = geo_transformer.wgs84_to_utm(longitude, latitude)
-                except Exception as e:
-                    print(f"转换 WGS84 到 UTM 坐标时出错: {e}")
-                    continue
-
-                pos3d = np.array([utm_x, utm_y, height])
 
                 rec = {'grid_code': grid_code,
                        'pos3d': pos3d}
                 recs.append(rec)
-        return recs
+                line_count += 1
+
+    # 将更新后的数据写回文件
+    with open(camera_locations, 'w', newline='', encoding='utf-8') as csv_file:
+        csv_writer = csv.writer(csv_file, delimiter=',')
+        csv_writer.writerows(updated_rows)
+
+    logging.debug(f'Processed {line_count} lines.')
+    return recs
 
 # 将边界像素坐标转换为地理坐标
 def convert_boundary_to_geo(json_data, K, R, ray_origin, dem_data, control_points, optimization_factors):
@@ -883,7 +871,7 @@ def do_it(image_name, json_file, features, camera_locations, pixel_x, pixel_y, o
         pixel = rec['pixel']
         if pixel[0] != 0 or pixel[1] != 0:
             plt.text(pixel[0], pixel[1], symbol, color='red', fontsize=6)
-    num_matches12 = find_homographies(recs, locations, im, False, 75.0, output)
+    num_matches12 = find_homographies(recs, locations, im, False, 85.0, output)
     num_matches2 = num_matches12[:, 1]
     num_matches2[num_matches2 == 0] = 1000000
     print(np.min(num_matches2))
@@ -892,8 +880,8 @@ def do_it(image_name, json_file, features, camera_locations, pixel_x, pixel_y, o
 
     # 设置 K 矩阵
     width, height = im.shape[1], im.shape[0]
-    cx = 9.82666819e+02
-    cy = 6.97950868e+02
+    cx = width / 2
+    cy = height / 2
     # 相机物理参数（单位：mm）
     focal_length_mm = 240.0  # 焦距 240mm
     sensor_width_mm = 127.0  # 传感器宽度 127mm
@@ -932,7 +920,7 @@ def do_it(image_name, json_file, features, camera_locations, pixel_x, pixel_y, o
     print(f"【DEBUG】PnP求解的相机位置 (UTM): {camera_origin}")
 
     # 修正相机位置海拔
-    dem_elev = get_dem_elevation(dem_data, camera_origin[0], camera_origin[1])
+    dem_elev = get_dem_elevation(dem_data,  camera_origin, coord_type='utm')
     corrected_camera_origin = np.array([camera_origin[0], camera_origin[1], dem_elev + 1.5])
 
     # 直接使用修正后的camera_origin作为ray_origin
@@ -1003,7 +991,7 @@ def main():
             "pixel_y": "Pixel_y_1898.jpg",
             "output": "zOutput_1898.png",
             "scale": 1.0,
-            "dem_file": "dem_dx_tinra.tif"
+            "dem_file": "dem_dx.tif"
         },
         {
             "image_name": "1900-1910.jpg",
