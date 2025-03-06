@@ -1,5 +1,6 @@
 import csv
 import cv2
+import os
 import numpy as np
 from pyproj import Transformer
 
@@ -22,6 +23,7 @@ def read_points_data(filename, pixel_x, pixel_y, scale):
         csv_reader = csv.reader(csv_file, delimiter=',')
         line_count = 0
         recs = []
+        pixels = []
         for row in csv_reader:
             if line_count == 0:
                 line_count += 1
@@ -31,15 +33,19 @@ def read_points_data(filename, pixel_x, pixel_y, scale):
             else:
                 line_count += 1
                 symbol = row[1]
+                name = row[2]
                 pixel = np.array([int(row[indx]), int(row[indy])]) / scale
                 longitude = float(row[4])
                 latitude = float(row[5])
                 elevation = float(row[6])
-                height = float(row[3]) + float(elevation)
-                if pixel[0] == 0 and pixel[1] == 0:
+                # 跳过当前处理照片中像素坐标为0,0的点
+                if int(row[indx]) == 0 and int(row[indy]) == 0:
                     continue
+                pixels.append(pixel)
+
                 easting, northing = geo_transformer.wgs84_to_utm(longitude, latitude)
                 pos3d = np.array([easting, northing, elevation])
+                print(f"Processed Point - Symbol: {symbol}, Name: {name}, Pixel: {pixel}, Lon: {longitude}, Lat: {latitude}, Easting: {easting}, Northing: {northing}, Elevation: {elevation}")
                 rec = {'symbol': symbol, 'pixel': pixel, 'pos3d': pos3d}
                 recs.append(rec)
         return recs
@@ -76,7 +82,7 @@ def estimate_camera_orientation(points_data, focal_lengths, sensor_sizes, image_
 
             success, initial_rotation_vector, initial_translation_vector, inliers = cv2.solvePnPRansac(
                 pos3d, pixels, K, dist_coeffs, useExtrinsicGuess=False,
-                iterationsCount=5000, reprojectionError=30.0, confidence=0.99
+                iterationsCount=5000, reprojectionError=70.0, confidence=0.99
             )
 
             if not success or inliers is None or len(inliers) < 6:
@@ -105,7 +111,7 @@ def estimate_camera_orientation(points_data, focal_lengths, sensor_sizes, image_
 
     all_results.sort(key=lambda x: x[3])
 
-    filtered_results = [result for result in all_results if result[0] <= 100]
+    filtered_results = [result for result in all_results if result[0] <= 200]
 
     if len(filtered_results) < 5:
         print("Filtered results are less than 5. Showing available results:")
@@ -138,12 +144,23 @@ def optimize_camera_center(selected_result, points_data):
     print("w", [w])
     print("h", [h])
 
-    # 使用所有点进行相机标定
-    pos3d_all = np.array([rec['pos3d'] for rec in points_data], dtype=np.float32)
-    pixels_all = np.array([rec['pixel'] for rec in points_data], dtype=np.float32)
+    # 提取内点
+    inlier_symbols = inliers
 
-    print("pos3d_all", [pos3d_all])
-    print("pixels_all", [pixels_all])
+    pos3d_inliers = []
+    pixels_inliers = []
+
+    for rec in points_data:
+        if rec['symbol'] in inlier_symbols:
+            pos3d_inliers.append(rec['pos3d'])
+            pixels_inliers.append(rec['pixel'])
+
+    pos3d_inliers = [np.array(pos3d_inliers, dtype=np.float32)]
+    pixels_inliers = [np.array(pixels_inliers, dtype=np.float32)]
+
+    # 输出以检查pos3d_inliers和pixels_inliers
+    print("pos3d_inliers:", pos3d_inliers)
+    print("pixels_inliers:", pixels_inliers)
 
     # 初始化畸变系数为0
     dist_coeffs = np.zeros((4, 1), dtype=np.float32)
@@ -152,16 +169,18 @@ def optimize_camera_center(selected_result, points_data):
 
     # 使用 cv2.calibrateCamera 进行相机标定优化光心，固定焦距和畸变系数
     ret, K_optimized, dist_coeffs_optimized, rvecs, tvecs = cv2.calibrateCamera(
-        [pos3d_all], [pixels_all], (w, h), K.astype(np.float32), dist_coeffs,
-        flags=cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_FOCAL_LENGTH | cv2.CALIB_FIX_ASPECT_RATIO |
-              cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 | cv2.CALIB_FIX_K6
+        pos3d_inliers, pixels_inliers, (w, h), K.astype(np.float32), dist_coeffs,
+        flags=cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_FOCAL_LENGTH |
+              cv2.CALIB_FIX_ASPECT_RATIO | cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 |
+              cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 |
+              cv2.CALIB_FIX_K6
     )
 
     print(f"Optimized Camera Matrix:\n{K_optimized}")
     print(f"Optimized Distortion Coefficients:\n{dist_coeffs_optimized}")
 
 # 图片文件选择
-img = '1900-1910'
+img = '1898'
 if img == '1898':
     image_name = '1898.jpg'
     features = 'feature_points_with_annotations.csv'
@@ -259,7 +278,9 @@ elif img == 'Worley Family-20':
     pixel_y = 'Pixel_y_Worley Family-20.jpg'
     scale = 1.0
 
-img = cv2.imread(image_name)
+image_path = os.path.join("historical photos", image_name)
+
+img = cv2.imread(image_path)
 h, w = img.shape[:2]
 image_size = (w, h)
 
@@ -271,7 +292,7 @@ sensor_sizes = [
     (127, 178),
     (203, 254)
 ]
-known_camera_origin = np.array([739424.6, 2888281.18, 770])
+known_camera_origin = np.array([7.39494471e+05, 2.88824053e+06, 7.84743037e+02])
 
 filtered_results = estimate_camera_orientation(points_data, focal_lengths, sensor_sizes, image_size)
 
