@@ -58,369 +58,6 @@ class GeoCoordTransformer:
 
 geo_transformer = GeoCoordTransformer()
 
-# 可视化
-def plot_error_histogram(errors, title='误差频率图'):
-    plt.figure(figsize=(10, 6))
-    plt.hist(errors, bins=30, alpha=0.75, color='blue', edgecolor='black')
-    plt.title(title)
-    plt.xlabel('误差大小')
-    plt.ylabel('频率')
-    plt.grid(True)
-    plt.show()
-
-def plot_camera_location_scores(scores):
-    scores = np.array(scores)
-    # 将X、Y坐标转换为经纬度坐标（WGS84）
-    transformer_to_wgs84 = Transformer.from_crs("epsg:32650", "epsg:4326")
-    latitudes, longitudes = transformer_to_wgs84.transform(scores[:, 4], scores[:, 5])
-    plt.figure(figsize=(12, 8))
-    # 绘制 min_score 的散点图，越小的误差颜色越深
-    scatter = plt.scatter(longitudes, latitudes, c=scores[:, 1], cmap='viridis_r', marker='o')
-    plt.colorbar(scatter, label='最小匹配误差 (min_score)')
-    plt.title('潜在相机位置得分图')
-    plt.xlabel('经度')
-    plt.ylabel('纬度')
-    plt.grid(True)
-    plt.show()
-
-
-def plot_camera_pose(camera_locations, best_location_idx):
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    loc3ds = np.array([loc['pos3d'] for loc in camera_locations])
-    # 将X、Y坐标转换为经纬度坐标（WGS84）
-    transformer_to_wgs84 = Transformer.from_crs("epsg:32650", "epsg:4326")
-    latitudes, longitudes = transformer_to_wgs84.transform(loc3ds[:, 0], loc3ds[:, 1])
-    ax.scatter(longitudes, latitudes, loc3ds[:, 2], c='blue', marker='o')
-    ax.scatter(longitudes[best_location_idx], latitudes[best_location_idx], loc3ds[best_location_idx, 2], c='red',
-               marker='^')
-    ax.set_title('相机位姿图')
-    ax.set_xlabel('经度')
-    ax.set_ylabel('纬度')
-    ax.set_zlabel('高度')
-    plt.show()
-
-def plot_error_boxplot(errors):
-    plt.figure(figsize=(10, 6))
-    plt.boxplot(errors, vert=True, patch_artist=True)
-    plt.title('误差分布箱线图')
-    plt.ylabel('误差大小')
-    plt.grid(True)
-    plt.show()
-
-def plot_distance_histogram(distances):
-    plt.figure(figsize=(10, 6))
-    plt.hist(distances, bins=30, alpha=0.75, color='green', edgecolor='black')
-    plt.title('距离度量直方图')
-    plt.xlabel('距离大小')
-    plt.ylabel('频率')
-    plt.grid(True)
-    plt.show()
-
-
-def plot_angle_rose(angles):
-    plt.figure(figsize=(10, 6))
-    plt.subplot(projection='polar')
-    plt.hist(angles, bins=30, alpha=0.75, color='purple', edgecolor='black')
-    plt.title('角度度量玫瑰图')
-    plt.show()
-
-
-def plot_nearest_neighbor_distances(nearest_neighbor_distances):
-    plt.figure(figsize=(10, 6))
-    plt.hist(nearest_neighbor_distances, bins=30, alpha=0.75, color='orange', edgecolor='black')
-    plt.title('特征点最近邻距离图')
-    plt.xlabel('距离大小')
-    plt.ylabel('频率')
-    plt.grid(True)
-    plt.show()
-
-def plot_homography_matrix_heatmap(H):
-    plt.figure(figsize=(10, 6))
-    sns.heatmap(H, annot=True, cmap='coolwarm', vmin=-1, vmax=1)
-    plt.title('单应性矩阵热图')
-    plt.show()
-
-
-def plot_ransac_scatter(inliers, outliers):
-    plt.figure(figsize=(10, 6))
-    if inliers.size > 0:
-        plt.scatter(inliers[:, 0], inliers[:, 1], c='green', marker='o', label='内点')
-    if outliers.size > 0:
-        plt.scatter(outliers[:, 0], outliers[:, 1], c='red', marker='x', label='外点')
-    plt.title('RANSAC算法散点图')
-    plt.xlabel('X 坐标')
-    plt.ylabel('Y 坐标')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-
-
-# **********
-# Calculate true and pixel distances between features
-# **********
-def correlate_features(features, depth_val):
-    result = ['id', 'sym_s', 'x_s', 'y_s', 'pixel_x_s', 'pixel_y_s', 'calc_pixel_x_s', 'calc_pixel_y_s',
-              'sym_t', 'x_t', 'y_t', 'pixel_x_t', 'pixel_y_t', 'calc_pixel_x_t', 'calc_pixel_y_t',
-              'dis_m_x', 'dis_m_y', 'dis_m', 'dis_pix_x', 'dis_pix_y', 'dis_pix', 'dis_c_pix_x', 'dis_c_pix_y',
-              'dis_c_pix', 'bear_pix', 'dis_depth_pix', 'bear_c_pix', 'dis_depth_c_pix']
-
-    results = []
-    results.append(result)
-    count = 1
-    i = 0
-    j = 0
-    features.remove(features[0])  # remove the headers
-    features.sort()  # sort alphabethically
-    for f1 in features:
-        i = j
-        while i < len(features):
-            if f1[1] != features[i][1]:
-                dis_m_x = int(features[i][3]) - int(f1[3])
-                dis_m_y = int(features[i][4]) - int(f1[4])
-                dis_m = math.sqrt(math.pow(dis_m_x, 2) + math.pow(dis_m_y, 2))
-
-                if f1[5] != 0 and features[i][5] != 0:
-                    dis_pix_x = int(features[i][5]) - int(f1[5])
-                    dis_pix_y = int(features[i][6]) - int(f1[6])
-                else:
-                    dis_pix_x = 0
-                    dis_pix_y = 0
-                dis_pix = math.sqrt(math.pow(dis_pix_x, 2) + math.pow(dis_pix_y, 2))
-
-                if features[i][7] != 0 and f1[7] != 0:
-                    dis_c_pix_x = int(features[i][7]) - int(f1[7])
-                    dis_c_pix_y = int(features[i][8]) - int(f1[8])
-                else:
-                    dis_c_pix_x = 0
-                    dis_c_pix_y = 0
-                dis_c_pix = math.sqrt(math.pow(dis_c_pix_x, 2) + math.pow(dis_c_pix_y, 2))
-
-                bear_pix = calc_bearing(f1[5], f1[6], features[i][5], features[i][6])
-                if bear_pix != 0 and bear_pix <= 180:
-                    dis_depth_pix = (abs(bear_pix - 90) / 90 + depth_val) * dis_pix
-                elif bear_pix != 0 and bear_pix > 180:
-                    dis_depth_pix = (abs(bear_pix - 270) / 90 + depth_val) * dis_pix
-                else:
-                    dis_depth_pix = 0
-
-                bear_c_pix = calc_bearing(f1[7], f1[8], features[i][7], features[i][8])
-                if bear_c_pix != 0 and bear_c_pix <= 180:
-                    dis_depth_c_pix = (abs(bear_c_pix - 90) / 90 + depth_val) * dis_c_pix
-                elif bear_c_pix != 0 and bear_c_pix > 180:
-                    dis_depth_c_pix = (abs(bear_c_pix - 270) / 90 + depth_val) * dis_c_pix
-                else:
-                    dis_depth_c_pix = 0
-
-                result = [str(count), f1[1], f1[3], f1[4], f1[5], f1[6], f1[7], f1[8], features[i][1], features[i][3],
-                          features[i][4], features[i][5], features[i][6], features[i][7], features[i][8],
-                          dis_m_x, dis_m_y, dis_m, dis_pix_x, dis_pix_y, dis_pix, dis_c_pix_x, dis_c_pix_y, dis_c_pix,
-                          bear_pix, dis_depth_pix, bear_c_pix, dis_depth_c_pix]
-
-                results.append(result)
-                count += 1
-            i += 1
-        j += 1
-    return results
-
-
-# **********
-# Calculation of the bearing from point 1 to point 2
-# **********
-def calc_bearing(x1, y1, x2, y2):
-    if x1 == 0 or x2 == 0 or y1 == 0 or y2 == 0:
-        degrees_final = 0
-    else:
-        deltaX = x2 - x1
-        deltaY = y2 - y1
-
-        degrees_temp = math.atan2(deltaX, deltaY) / math.pi * 180
-
-        if degrees_temp < 0:
-            degrees_final = 360 + degrees_temp
-        else:
-            degrees_final = degrees_temp
-
-        if degrees_final < 180:
-            degrees_final = 180 - degrees_final
-        else:
-            degrees_final = 360 + 180 - degrees_final
-
-    return degrees_final
-
-# **********
-# Find homographies function
-# **********
-def find_homographies(recs, camera_locations, im, show, ransacbound, output):
-    pixels = []
-    pos3ds = []
-    symbols = []
-    for r in recs:
-        pixels.append(r['pixel'])
-        pos3ds.append(r['pos3d'])
-        symbols.append(r['symbol'])
-    pixels = np.array(pixels)
-    pos3ds = np.array(pos3ds)
-    symbols = np.array(symbols)
-    loc3ds = []
-    grids = []
-    for cl in camera_locations:
-        grids.append(cl['grid_code'])
-        loc3ds.append(cl['pos3d'])
-    grids = np.array(grids)
-    loc3ds = np.array(loc3ds)
-    num_matches = np.zeros((loc3ds.shape[0], 2))
-    scores = []
-    for i in range(0, grids.shape[0], 1):  # 50
-        grid_code_min = 0
-        if grids[i] >= grid_code_min:
-            if show:
-                print(i, grids[i], loc3ds[i])
-            M, num_matches[i, 0], num_matches[i, 1] = find_homography(recs, pixels, pos3ds, symbols, loc3ds[i], im, show,
-                                                                   ransacbound, output)
-        else:
-            num_matches[i, :] = 0
-        score = [i + 1, num_matches[i, 0], num_matches[i, 1], grids[i], loc3ds[i][0], loc3ds[i][1], loc3ds[i][2]]
-        scores.append(score)
-
-    if show is False:
-        outputCsv = output.replace(".jpg", "_location.csv")
-        csvFile = open(outputCsv, 'w', newline='', encoding='utf-8')
-        csvWriter = csv.writer(csvFile)
-        csvWriter.writerow(['location_id', 'min_score', 'max_score', 'grid_code', 'Z', 'X', 'Y'])
-        for s in scores:
-            csvWriter.writerow(s)
-
-    plot_camera_location_scores(scores)
-    plot_camera_pose(camera_locations, np.argmin(num_matches[:, 1]))
-
-    return num_matches
-
-# **********
-# Find homography function
-# **********
-def find_homography(recs, pixels, pos3ds, symbols, camera_location, im, show, ransacbound, outputfile):
-    pixels = np.array(pixels)
-    pos2 = np.zeros((len(pixels), 2))
-    good = np.zeros(len(pixels))
-    for i in range(len(pixels)):
-        good[i] = pixels[i][0] != 0 or pixels[i][1] != 0
-        p = pos3ds[i, :] - camera_location
-        p = np.array([p[2], p[1], p[0]])
-        p = p / p[2]
-        pos2[i, :] = p[0:2]
-    M, mask = cv2.findHomography(pos2[good == 1], np.array(pixels)[good == 1], cv2.RANSAC, ransacbound)
-
-    M = np.linalg.inv(M)
-    logging.debug(f'Homography Matrix M: {M}')
-    logging.debug(f'Mask: {mask}')
-    if show:
-        print('M', M, np.sum(mask))
-    if show:
-        plt.figure(figsize=(40, 20))
-        plt.imshow(im)
-        for rec in recs:
-            symbol = rec['symbol']
-            pixel = rec['pixel']
-            if pixel[0] != 0 or pixel[1] != 0:
-                plt.text(pixel[0], pixel[1], symbol, color='purple', fontsize=6, weight='bold')
-    err1 = 0
-    err2 = 0
-    feature = ['id', 'symbol', 'name', 'x', 'y', 'pixel_x', 'pixel_y', 'calc_pixel_x', 'calc_pixel_y']
-    features = []
-    features.append(feature)
-    for i in range(pos2[good == 1].shape[0]):
-        p1 = np.array(pixels)[good == 1][i, :]
-        pp = np.array([pos2[good == 1][i, 0], pos2[good == 1][i, 1], 1.0])
-        pp2 = np.matmul(np.linalg.inv(M), pp)
-        pp2 = pp2 / pp2[2]
-        P1 = np.array([p1[0], p1[1], 1.0])
-        PP2 = np.matmul(M, P1)
-        PP2 = PP2 / PP2[2]
-        P2 = pos2[good == 1][i, :]
-        logging.debug(f'Feature {i}: mask={mask[i]}, p1={p1}, pp2={pp2[0:2]}, distance={np.linalg.norm(p1 - pp2[0:2])}')
-        if show and good[i]:
-            print(i)
-            print(mask[i] == 1, p1, pp2[0:2], np.linalg.norm(p1 - pp2[0:2]))
-            print(mask[i] == 1, P2, PP2[0:2], np.linalg.norm(P2 - PP2[0:2]))
-        if mask[i] == 1:
-            err1 += np.linalg.norm(p1 - pp2[0:2])
-            err2 += np.linalg.norm(P2 - PP2[0:2])
-        if show:
-            color = 'green' if mask[i] == 1 else 'red'
-            plt.plot([p1[0], pp2[0]], [p1[1], pp2[1]], color=color, linewidth=2)
-            plt.plot(p1[0], p1[1], marker='X', color=color, markersize=3)
-            plt.plot(pp2[0], pp2[1], marker='o', color=color, markersize=3)
-            sym = ''
-            name = ''
-            for r in recs:
-                px = r['pixel'].tolist()
-                if px[0] == p1[0] and px[1] == p1[1]:
-                    sym = r['symbol']
-                    name = r['name']
-                    x = r['pos3d'][0]
-                    y = r['pos3d'][1]
-                    break
-            feature = [i, sym, name, x, y, p1[0], p1[1], pp2[0], pp2[1]]
-            features.append(feature)
-
-    i = -1
-    for r in recs:  # Extracting features that were not noted on the image (pixel_x and pixel_y are 0)
-        i += 1
-        p1 = pixels[i, :]
-        if p1[0] == 0 and p1[1] == 0:
-            pp = np.array([pos2[i, 0], pos2[i, 1], 1.0])
-            pp2 = np.matmul(np.linalg.inv(M), pp)
-            pp2 = pp2 / pp2[2]
-            logging.debug(f'Unnoted Feature {i}: symbol={r["symbol"]}, pp2={pp2[0:2]}')
-            if show:
-                plt.text(pp2[0], pp2[1], r['symbol'], color='black', fontsize=6, style='italic',
-                         weight='bold')
-                plt.plot(pp2[0], pp2[1], marker='s', markersize=3, color='black')
-                x = r['pos3d'][0]
-                y = r['pos3d'][1]
-                feature = [i, recs[i]['symbol'], recs[i]['name'], x, y, 0, 0, pp2[0], pp2[1]]
-                features.append(feature)
-    if show:
-        outputCsv = outputfile.replace(".jpg", "_accuracies.csv")
-        with open(outputCsv, 'w', newline='', encoding='utf-8-sig') as csvFile:
-            csvWriter = csv.writer(csvFile)
-            for f in features:
-                csvWriter.writerow(f)
-
-        # 发送特征到相关函数
-        results = correlate_features(features, 1)
-        outputCsv = outputfile.replace(".jpg", "_correlations.csv")
-        with open(outputCsv, 'w', newline='', encoding='utf-8') as csvFile:
-            csvWriter = csv.writer(csvFile)
-            for r in results:
-                csvWriter.writerow(r)
-
-        plot_distance_histogram(
-            [math.sqrt(math.pow(int(f1[3]) - int(f2[3]), 2) + math.pow(int(f1[4]) - int(f2[4]), 2)) for f1 in features
-             for f2 in features if f1 != f2])
-        plot_angle_rose([calc_bearing(f1[5], f1[6], f2[5], f2[6]) for f1 in features for f2 in features if f1 != f2])
-        points = np.array([[f[5], f[6]] for f in features])
-        dist_matrix = distance.cdist(points, points, 'euclidean')
-        np.fill_diagonal(dist_matrix, np.inf)
-        plot_nearest_neighbor_distances(np.min(dist_matrix, axis=1))
-        plot_error_histogram([err1], '误差频率图 (err1)')
-        plot_error_histogram([err2], '误差频率图 (err2)')
-        plot_error_boxplot([np.linalg.norm(p1 - pp2[0:2]) for i in range(pos2[good == 1].shape[0])])
-        plot_homography_matrix_heatmap(M)
-        inliers = np.array([p1 for i in range(pos2[good == 1].shape[0]) if mask[i] == 1])
-        outliers = np.array([p1 for i in range(pos2[good == 1].shape[0]) if mask[i] == 0])
-        plot_ransac_scatter(inliers, outliers)
-
-        print('Output image file: ', outputfile)
-        plt.savefig(outputfile.replace(".jpg", "_output.png"), dpi=300)
-        plt.show()
-
-    err2 += np.sum(1 - mask) * ransacbound
-    if show:
-        print('err', err1, err1 / np.sum(mask), err2, err2 / np.sum(mask))
-    return M, err1, err2
-
 # 加载DEM数据
 def load_dem_data(dem_file):
     dem_dataset = gdal.Open(dem_file)
@@ -562,7 +199,7 @@ def pixel_to_ray(pixel_x, pixel_y, K, R, ray_origin):
     return ray_origin, utm_ray
 
 
-def calculate_weights(input_pixel, control_points, max_weight=1, knn_weight=10):
+def calculate_weights(input_pixel, control_points, max_weight=1, knn_weight=5):
     weights = []
     input_pixel = np.array(input_pixel, dtype=np.float64)  # 确保 input_pixel 是浮点数类型
     distances = []
@@ -620,7 +257,7 @@ def weighted_average_optimization_factors(factors, weights):
     return weighted_factors
 
 # 计算射线与DEM的交点
-def ray_intersect_dem(ray_origin, ray_direction, dem_data, max_search_dist=10000, step=1):
+def ray_intersect_dem(ray_origin, ray_direction, dem_data, max_search_dist=5000, step=1):
     current_pos = np.array(ray_origin, dtype=np.float64)
     step_count = 0  # 初始化步进计数器
     for _ in range(int(max_search_dist / step)):
@@ -632,18 +269,18 @@ def ray_intersect_dem(ray_origin, ray_direction, dem_data, max_search_dist=10000
             dem_elev = dem_data['interpolator']((lat, lon))
         except Exception as e:
             logging.error(f"【错误】插值时出错: {e}")
-            return None
+            return None, step_count
         logging.debug(f"【DEBUG】DEM海拔: {dem_elev}, 当前高度: {current_pos[2]}")
 
         if step_count >= 150 and current_pos[2] <= dem_elev:
-            return np.array([current_easting, current_northing, current_pos[2]])
+            return np.array([current_easting, current_northing, current_pos[2]]), step_count
 
         current_pos[0] += step * ray_direction[0]
         current_pos[1] += step * ray_direction[1]
         current_pos[2] += step * ray_direction[2]
         step_count += 1  # 增加步进计数器
 
-    return None
+    return None, step_count
 
 # 输入像素坐标，输出地理坐标
 def pixel_to_geo(pixel_coord, K, R, ray_origin, dem_data, control_points, optimization_factors):
@@ -657,8 +294,8 @@ def pixel_to_geo(pixel_coord, K, R, ray_origin, dem_data, control_points, optimi
     print(f"【DEBUG】初始射线方向: {ray_direction}")
     # 应用优化因子校正射线方向的Z分量
     optimized_ray_direction = np.array([
-        ray_direction[0],
-        ray_direction[1],
+        ray_direction[0] * weighted_optimization_factors[0],
+        ray_direction[1] * weighted_optimization_factors[1],
         ray_direction[2] * weighted_optimization_factors[2]
     ])
     print(f"【DEBUG】优化射线方向: {optimized_ray_direction}")
@@ -666,16 +303,17 @@ def pixel_to_geo(pixel_coord, K, R, ray_origin, dem_data, control_points, optimi
     final_ray_direction = optimized_ray_direction / np.linalg.norm(optimized_ray_direction)
     print(f"【DEBUG】最终射线方向: {final_ray_direction}")
     # 计算射线与DEM的交点
-    geo_coord = ray_intersect_dem(ray_origin, final_ray_direction, dem_data)
+    geo_coord, total_steps = ray_intersect_dem(ray_origin, final_ray_direction, dem_data)
     print(f"【DEBUG】地理坐标: {geo_coord}")
+    print(f"【DEBUG】射线步进总步数: {total_steps}")
 
-    return geo_coord
+    return geo_coord, total_steps
 
 # **********
 # read data from the features file
 # **********
-def read_points_data(filename, pixel_x, pixel_y, scale, dem_data):
-    updated_rows = []
+def read_points_data(filename, pixel_x, pixel_y, scale):
+    geo_transformer = GeoCoordTransformer()
     with open(filename, encoding='utf-8') as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
         line_count = 0
@@ -683,91 +321,29 @@ def read_points_data(filename, pixel_x, pixel_y, scale, dem_data):
         pixels = []
         for row in csv_reader:
             if line_count == 0:
-                updated_rows.append(row)  # 保留标题行
                 line_count += 1
                 names = row
                 indx = names.index(pixel_x)
                 indy = names.index(pixel_y)
             else:
+                line_count += 1
                 symbol = row[1]
                 name = row[2]
                 pixel = np.array([int(row[indx]), int(row[indy])]) / scale
                 longitude = float(row[4])
                 latitude = float(row[5])
-                elevation = get_dem_elevation(dem_data, (longitude, latitude), coord_type='wgs84')
-                row[6] = str(elevation)  # 更新Elevation列
-                updated_rows.append(row)  # 保存更新后的行
+                elevation = float(row[6])
                 # 跳过当前处理照片中像素坐标为0,0的点
                 if int(row[indx]) == 0 and int(row[indy]) == 0:
                     continue
                 pixels.append(pixel)
-                # 添加坐标转换
-                try:
-                    logging.debug(f'Processing row {line_count}: lat={latitude}, lon={longitude}')
-                    easting, northing = geo_transformer.wgs84_to_utm(longitude, latitude)  # 注意顺序
-                    pos3d = np.array([easting, northing, elevation])
-                    print(f"Processed Point - Symbol: {symbol}, Name: {name}, Pixel: {pixel}, Lon: {longitude}, Lat: {latitude}, Easting: {easting}, Northing: {northing}, Elevation: {elevation}")
-                except ValueError as e:
-                    logging.error(f'Error processing row {line_count}: {e}')
-                    continue
 
-                rec = {'symbol': symbol,
-                       'pixel': pixel,
-                       'pos3d': pos3d,
-                       'name': name}
+                easting, northing = geo_transformer.wgs84_to_utm(longitude, latitude)
+                pos3d = np.array([easting, northing, elevation])
+                print(f"Processed Point - Symbol: {symbol}, Name: {name}, Pixel: {pixel}, Lon: {longitude}, Lat: {latitude}, Easting: {easting}, Northing: {northing}, Elevation: {elevation}")
+                rec = {'symbol': symbol, 'pixel': pixel, 'pos3d': pos3d}
                 recs.append(rec)
-                line_count += 1
-
-    # 将更新后的数据写回文件
-    with open(filename, 'w', newline='', encoding='utf-8') as csv_file:
-        csv_writer = csv.writer(csv_file, delimiter=',')
-        csv_writer.writerows(updated_rows)
-
-    logging.debug(f'Processed {line_count} lines.')
-    return recs
-
-# **********
-# read data from the potential camera locations file
-# **********
-def read_camera_locations(camera_locations, dem_data):
-    updated_rows = []
-    with open(camera_locations, encoding='utf-8') as csv_file:
-        csv_reader = csv.reader(csv_file, delimiter=',')
-        line_count = 0
-        recs = []
-        for row in csv_reader:
-            if line_count == 0:
-                updated_rows.append(row)  # 保留标题行
-                line_count += 1
-                names = row
-            else:
-                grid_code = int(row[1])
-                longitude = float(row[2])
-                latitude = float(row[3])
-                elevation = get_dem_elevation(dem_data, (longitude, latitude), coord_type='wgs84') + 1.5
-                row[4] = str(elevation)  # 更新Elevation列
-                updated_rows.append(row)  # 保存更新后的行
-                # 添加坐标转换
-                try:
-                    logging.debug(f'Processing row {line_count}: lat={latitude}, lon={longitude}')
-                    easting, northing = geo_transformer.wgs84_to_utm(longitude, latitude)  # 注意顺序
-                    pos3d = np.array([easting, northing, elevation])
-                except ValueError as e:
-                    logging.error(f'Error processing row {line_count}: {e}')
-                    continue
-
-                rec = {'grid_code': grid_code,
-                       'pos3d': pos3d}
-                recs.append(rec)
-                line_count += 1
-
-    # 将更新后的数据写回文件
-    with open(camera_locations, 'w', newline='', encoding='utf-8') as csv_file:
-        csv_writer = csv.writer(csv_file, delimiter=',')
-        csv_writer.writerows(updated_rows)
-
-    logging.debug(f'Processed {line_count} lines.')
-    return recs
+        return recs
 
 # 将边界像素坐标转换为地理坐标
 def convert_boundary_to_geo(json_data, K, R, ray_origin, dem_data, control_points, optimization_factors):
@@ -786,7 +362,7 @@ def convert_boundary_to_geo(json_data, K, R, ray_origin, dem_data, control_point
         boundary_points_obj = obj['segmentation']
         for pixel_x, pixel_y in boundary_points_obj:
             geo_coord = pixel_to_geo([pixel_x, pixel_y], K, R, ray_origin, dem_data, control_points, optimization_factors)
-            if geo_coord.all():
+            if geo_coord is not None:
                 boundary_geo_coords[key].append(geo_coord)
                 boundary_points[key].append((pixel_x, pixel_y))
 
@@ -798,6 +374,9 @@ def save_boundary_to_csv(boundary_geo_coords, boundary_points, csv_file='boundar
 
     for (group, category), coords in boundary_geo_coords.items():
         for i, coord in enumerate(coords):
+            if len(coord) < 3:
+                logging.error(f"Invalid coordinate {coord} for category {category} and group {group}")
+                continue
             pixel_x, pixel_y = boundary_points[(group, category)][i]
             csv_data.append([category, group, pixel_x, pixel_y, coord[0], coord[1], coord[2]])
 
@@ -863,29 +442,16 @@ def do_it(image_name, json_file, features, camera_locations, pixel_x, pixel_y, o
     # 加载DEM数据（DEM范围为UTM）
     dem_data = load_dem_data(dem_file)
 
-    recs = read_points_data(features, pixel_x, pixel_y, scale, dem_data)
-    locations = read_camera_locations(camera_locations, dem_data)
-
-    for rec in recs:
-        symbol = rec['symbol']
-        pixel = rec['pixel']
-        if pixel[0] != 0 or pixel[1] != 0:
-            plt.text(pixel[0], pixel[1], symbol, color='red', fontsize=6)
-    num_matches12 = find_homographies(recs, locations, im, False, 85.0, output)
-    num_matches2 = num_matches12[:, 1]
-    num_matches2[num_matches2 == 0] = 1000000
-    print(np.min(num_matches2))
-    theloci = np.argmin(num_matches2)
-    print(f"【DEBUG】推测相机位置: {locations[theloci]['pos3d']}")
+    recs = read_points_data(features, pixel_x, pixel_y, scale)
 
     # 设置 K 矩阵
     width, height = im.shape[1], im.shape[0]
     cx = width / 2
     cy = height / 2
     # 相机物理参数（单位：mm）
-    focal_length_mm = 240.0  # 焦距 240mm
-    sensor_width_mm = 127.0  # 传感器宽度 127mm
-    sensor_height_mm = 178.0  # 传感器高度 178mm
+    focal_length_mm = 180.0
+    sensor_width_mm = 102.0
+    sensor_height_mm = 127.0
     # 根据物理参数将焦距换算为像素单位：
     fx = focal_length_mm / sensor_width_mm * width
     fy = focal_length_mm / sensor_height_mm * height
@@ -921,7 +487,7 @@ def do_it(image_name, json_file, features, camera_locations, pixel_x, pixel_y, o
 
     # 修正相机位置海拔
     dem_elev = get_dem_elevation(dem_data,  camera_origin, coord_type='utm')
-    corrected_camera_origin = np.array([camera_origin[0], camera_origin[1], dem_elev + 1.5])
+    corrected_camera_origin = np.array([camera_origin[0], camera_origin[1], dem_elev])
 
     # 直接使用修正后的camera_origin作为ray_origin
     ray_origin = corrected_camera_origin
@@ -954,10 +520,11 @@ def do_it(image_name, json_file, features, camera_locations, pixel_x, pixel_y, o
             input_pixel_x, input_pixel_y = map(float, pixel_values)
             input_pixel = [input_pixel_x, input_pixel_y]  # 使用输入的像素坐标
 
-            geo_coord = pixel_to_geo(input_pixel, K, R, ray_origin, dem_data, control_points, optimization_factors)
+            geo_coord, total_steps = pixel_to_geo(input_pixel, K, R, ray_origin, dem_data, control_points, optimization_factors)
             if geo_coord is not None:
                 print(f"像素坐标 ({input_pixel_x}, {input_pixel_y}) 对应的UTM地理坐标:")
                 print(f"Easting: {geo_coord[0]:.2f}, Northing: {geo_coord[1]:.2f}, 高度: {geo_coord[2]:.2f}")
+                print(f"射线步进总步数: {total_steps}")
             else:
                 print(f"无法找到 ({input_pixel_x}, {input_pixel_y}) 对应的地理坐标，请检查输入或 DEM 数据。")
 
@@ -1002,7 +569,7 @@ def main():
             "pixel_y": "Pixel_y_1900-1910.jpg",
             "output": "zOutput_1900-1910.png",
             "scale": 1.0,
-            "dem_file": "dem_data.tif"
+            "dem_file": "dem_dx.tif"
         },
         # 添加更多图像的信息
         # {
