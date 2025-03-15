@@ -134,7 +134,7 @@ def estimate_camera_pose(pos3d, pixels, K):
     success, rotation_vector, translation_vector, inliers = cv2.solvePnPRansac(
         pos3d, pixels, K, dist_coeffs,
         iterationsCount=5000,
-        reprojectionError=50.0,
+        reprojectionError=30.0,
         confidence=0.99
     )
     print("Inliers:\n", inliers)
@@ -199,7 +199,7 @@ def pixel_to_ray(pixel_x, pixel_y, K, R, ray_origin):
     return ray_origin, utm_ray
 
 
-def calculate_weights(input_pixel, control_points, max_weight=1, knn_weight=5):
+def calculate_weights(input_pixel, control_points, max_weight=1, knn_weight=30):
     weights = []
     input_pixel = np.array(input_pixel, dtype=np.float64)  # 确保 input_pixel 是浮点数类型
     distances = []
@@ -272,7 +272,7 @@ def ray_intersect_dem(ray_origin, ray_direction, dem_data, max_search_dist=5000,
             return None, step_count
         logging.debug(f"【DEBUG】DEM海拔: {dem_elev}, 当前高度: {current_pos[2]}")
 
-        if step_count >= 150 and current_pos[2] <= dem_elev:
+        if step_count >= 50 and current_pos[2] <= dem_elev + 0.5 :
             return np.array([current_easting, current_northing, current_pos[2]]), step_count
 
         current_pos[0] += step * ray_direction[0]
@@ -396,6 +396,8 @@ def save_boundary_to_shapefiles(boundary_geo_coords, json_data, output_dir):
             print(f"Group {group}, Category {category} 边界点数量少于3个，生成Polygon失败")
             continue
 
+        group_coords = [(coord[0], coord[1]) for coord in group_coords if len(coord) >= 2]
+
         attributes = []
         geometry = []
 
@@ -487,7 +489,7 @@ def do_it(image_name, json_file, features, camera_locations, pixel_x, pixel_y, o
 
     # 修正相机位置海拔
     dem_elev = get_dem_elevation(dem_data,  camera_origin, coord_type='utm')
-    corrected_camera_origin = np.array([camera_origin[0], camera_origin[1], dem_elev])
+    corrected_camera_origin = np.array([camera_origin[0], camera_origin[1], dem_elev + 1.5 ])
 
     # 直接使用修正后的camera_origin作为ray_origin
     ray_origin = corrected_camera_origin
