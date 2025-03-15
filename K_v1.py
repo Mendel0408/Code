@@ -82,7 +82,7 @@ def estimate_camera_orientation(points_data, focal_lengths, sensor_sizes, image_
 
             success, initial_rotation_vector, initial_translation_vector, inliers = cv2.solvePnPRansac(
                 pos3d, pixels, K, dist_coeffs, useExtrinsicGuess=False,
-                iterationsCount=5000, reprojectionError=50.0, confidence=0.99
+                iterationsCount=5000, reprojectionError=30.0, confidence=0.99
             )
 
             if not success or inliers is None or len(inliers) < 6:
@@ -103,7 +103,7 @@ def estimate_camera_orientation(points_data, focal_lengths, sensor_sizes, image_
 
             R_matrix, _ = cv2.Rodrigues(optimized_rotation_vector)
             camera_origin = -R_matrix.T @ optimized_translation_vector.flatten()
-            distance_to_known_origin = np.linalg.norm(camera_origin - known_camera_origin)
+            distance_to_known_origin = np.linalg.norm(camera_origin[:2] - known_camera_origin[:2])
 
             inlier_symbols = [symbols[idx] for idx in inliers.flatten()]
 
@@ -111,7 +111,7 @@ def estimate_camera_orientation(points_data, focal_lengths, sensor_sizes, image_
 
     all_results.sort(key=lambda x: x[3])
 
-    filtered_results = [result for result in all_results if result[0] <= 200]
+    filtered_results = [result for result in all_results if result[0] <= 150]
 
     if len(filtered_results) < 5:
         print("Filtered results are less than 5. Showing available results:")
@@ -159,7 +159,7 @@ def optimize_camera_center(selected_result, points_data):
     # 使用 cv2.calibrateCamera 进行相机标定优化光心，固定焦距和畸变系数
     ret, K_optimized, dist_coeffs_optimized, rvecs, tvecs = cv2.calibrateCamera(
         [pos3d_all], [pixels_all], (w, h), K.astype(np.float32), dist_coeffs,
-        flags=cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_FOCAL_LENGTH | cv2.CALIB_FIX_ASPECT_RATIO | cv2.CALIB_FIX_TANGENT_DIST |
+        flags=cv2.CALIB_USE_INTRINSIC_GUESS | cv2.CALIB_FIX_FOCAL_LENGTH | cv2.CALIB_FIX_ASPECT_RATIO |
               cv2.CALIB_FIX_K1 | cv2.CALIB_FIX_K2 | cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K4 | cv2.CALIB_FIX_K5 | cv2.CALIB_FIX_K6
     )
 
@@ -279,7 +279,7 @@ sensor_sizes = [
     (127, 178),
     (203, 254)
 ]
-known_camera_origin = np.array([7.39494471e+05, 2.88824053e+06, 7.84743037e+02])
+known_camera_origin = np.array([7.39410777e+05, 2.88828092e+06, 7.78499264e+02])
 
 filtered_results = estimate_camera_orientation(points_data, focal_lengths, sensor_sizes, image_size)
 
